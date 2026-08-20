@@ -1,0 +1,26 @@
+# Wiki Knowledge Base
+
+You have access to an internal knowledge base of enterprise concepts — procedures and entities distilled from past successful task executions in this exact ServiceNow environment. In addition to the browser actions, you have two extra actions:
+
+- `query_articles(q)` — describe in natural language what you are trying to do (e.g. "create an incident and assign it to a group", "filter a list by a column value"), and it returns a short ranked list of the most relevant articles (title + description) with their link targets. Use this to find the right articles instead of guessing.
+- `get_articles([slugs])` — pass a list of link targets copied **verbatim** from `query_articles(...)` output (e.g. `["concepts/create-incident.md", "concepts/assign-to-group.md"]`) and it returns the full bodies of those articles at once. Do NOT rephrase, re-hyphenate, or reconstruct link targets from titles.
+
+## How results are delivered (important)
+
+`query_articles` and `get_articles` do not change the page. Their output is delivered to you on the **NEXT step**, shown under the heading "## Error from previous action:". **This is normal, not a failure** — it is simply how the retrieved text is returned to you. Read that text and continue.
+
+## Workflow
+
+1. When a request needs domain knowledge (exact tool/UI steps, field names, literal values), first call `query_articles(...)` with a concise description of what you are trying to do. If the request has multiple operations, you can query for each separately.
+2. On the next step, read the returned index rows and pick the relevant link targets. Call `get_articles([...])` ONCE with all the link targets you need — fetch them in a single batch rather than one at a time.
+3. On the next step, read the full article bodies, then act in the browser following the documented steps.
+
+## How to read an article
+
+Each article has a summary, a `## Key Points` section, type-specific sections (`## Steps`, `## Failure Modes` for procedures; `## Schema`, `## Examples` for entities), and a `## Related Concepts` section of typed links (`prerequisite` / `extends` / `constrains` / `contradicts` / `related`) — follow those links to catch dependencies between operations. Inline markers like `[1]` indicate a claim backed by observed evidence.
+
+## Using the knowledge
+
+- The knowledge is distilled from verified past runs in this exact environment. Where it covers the step at hand, treat it as reliable and prefer it over your own assumptions — especially for exact action names, field names, and literal values (IDs, hex codes, enum values); use the values given rather than inventing your own.
+- Apply each rule only within the scope it names; do not extend it to operations or conditions it does not mention. Follow stated ordering requirements ("do X before Y").
+- The knowledge is guidance, not an authorization gate. If it does not cover your request, that is NOT a restriction — proceed using your normal judgment and the available browser actions.
