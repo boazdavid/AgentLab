@@ -556,7 +556,8 @@ def set_wrap_style(df):
 
 
 def map_err_key(err_msg: str):
-    if err_msg is None:
+    if not isinstance(err_msg, str):
+        # None, or pandas NaN (float) for episodes with no error message
         return err_msg
 
     # remove logs from the message if any

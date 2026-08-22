@@ -113,6 +113,25 @@ def test_action_set_includes_custom_source():
     assert "get_articles" in aset.action_set
 
 
+def test_action_set_subset_only_get_articles():
+    """Index-batch arm exposes only get_articles, never query_articles."""
+    aset = WikiActionSetArgs(
+        action_names=("get_articles",), subsets=("workarena", "custom")
+    ).make_action_set()
+    includes = aset.python_includes
+    assert "def get_articles" in includes
+    assert "def query_articles" not in includes
+    assert "get_articles" in aset.action_set
+    assert "query_articles" not in aset.action_set
+
+
+def test_action_set_default_keeps_both():
+    """Default action_names stays backward compatible (both actions present)."""
+    aset = WikiActionSetArgs(subsets=("workarena", "custom")).make_action_set()
+    assert "def query_articles" in aset.python_includes
+    assert "def get_articles" in aset.python_includes
+
+
 def test_action_set_codegen_for_query():
     aset = WikiActionSetArgs(subsets=("workarena", "custom")).make_action_set()
     code = aset.to_python_code('query_articles("create incident")')

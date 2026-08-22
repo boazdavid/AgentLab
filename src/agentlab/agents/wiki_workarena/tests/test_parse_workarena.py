@@ -20,7 +20,8 @@ def _fabricated_steps():
     ``last_action_error``.
     """
     return [
-        # 0: click that succeeds (next step has no error)
+        # 0: click that succeeds. Its RESULTING observation is step 1's state
+        # (url=/dashboard, axtree "RootWebArea 'Dashboard'").
         {
             "think": "I should open the app navigator.\n\n<action>\nclick('79')\n</action>",
             "action": "click('79')",
@@ -32,13 +33,13 @@ def _fabricated_steps():
             "reward": 0,
             "terminated": False,
         },
-        # 1: fill whose NEXT step carries a real (non-WIKI) error -> failure
+        # 1: fill whose NEXT step carries a real (non-WIKI) error -> failure.
         {
             "think": "\n\n<action>\nfill('242', 'Configuration')\n</action>",
             "action": "fill('242', 'Configuration')",
             "action_name": "fill",
             "action_args": {"args": ["242", "Configuration"]},
-            "url": "https://example.service-now.com/home",
+            "url": "https://example.service-now.com/dashboard",
             "axtree_head": "RootWebArea 'Dashboard'",
             "last_action_error": None,
             "reward": 0,
@@ -50,19 +51,22 @@ def _fabricated_steps():
             "action": "query_articles('how to navigate modules')",
             "action_name": "query_articles",
             "action_args": {"args": ["how to navigate modules"]},
-            "url": "https://example.service-now.com/home",
+            "url": "https://example.service-now.com/search",
+            "axtree_head": "RootWebArea 'Search'",
             # this step's OWN error is the real error produced by step 1's fill
             "last_action_error": "TimeoutError: locator '242' not found",
             "reward": 0,
             "terminated": False,
         },
-        # 3: click after wiki results; its own error is the WIKI payload from step 2
+        # 3: click after wiki results; its own error is the WIKI payload from step 2.
+        # Its RESULTING observation is step 4's state (url=/list.do).
         {
             "think": "<action>\nclick('2870')\n</action>",
             "action": "click('2870')",
             "action_name": "click",
             "action_args": {"args": ["2870"]},
-            "url": "https://example.service-now.com/home",
+            "url": "https://example.service-now.com/results",
+            "axtree_head": "RootWebArea 'Results'",
             "last_action_error": "WIKI SEARCH RESULTS:\nconcepts/navigate.md — how to navigate the app",
             "reward": 0,
             "terminated": False,
@@ -106,10 +110,26 @@ def test_first_message_is_task_goal():
     assert m0["tool_calls"] == []
 
 
+def test_first_action_is_preceded_by_observation():
+    # KEY FIX: each step's OWN observation is emitted as a user message BEFORE
+    # that step's assistant action — including the very first action.
+    msgs = _traj()["messages"]
+    # message[1] is the observation the agent SAW to decide step 0's action.
+    m1 = msgs[1]
+    assert m1["role"] == "user"
+    assert m1["content"].startswith("[observation]")
+    assert "url=https://example.service-now.com/home" in m1["content"]
+    assert "RootWebArea 'Home'" in m1["content"]
+    assert m1["tool_calls"] == []
+    # message[2] is the first assistant action, immediately AFTER the observation.
+    assert msgs[2]["role"] == "assistant"
+    assert msgs[2]["tool_calls"][0]["tool_name"] == "click"
+
+
 def test_click_step_named_args_and_reasoning():
     msgs = _traj()["messages"]
-    # message[1] is the assistant for step 0 (click)
-    a = msgs[1]
+    # message[2] is the assistant for step 0 (click); message[1] is its observation.
+    a = msgs[2]
     assert a["role"] == "assistant"
     assert a["content"] == "I should open the app navigator."
     assert "<action>" not in a["content"]
@@ -117,6 +137,12 @@ def test_click_step_named_args_and_reasoning():
     tc = a["tool_calls"][0]
     assert tc["tool_name"] == "click"
     assert tc["args"] == {"bid": "79"}
+    # regular browser action success: response is None — the observation the
+    # agent saw lives in the PRECEDING user message (message[1]), not here.
+    assert tc["success"] is True
+    assert tc["error_text"] is None
+    assert tc["response"] is None
+    assert "url=https://example.service-now.com/home" in msgs[1]["content"]
 
 
 def test_fill_step_named_args():
@@ -149,21 +175,41 @@ def test_empty_reasoning_placeholder():
     assert a["content"] == "(no reasoning text)"
 
 
-def test_observation_messages_present():
+def test_observation_precedes_every_assistant_message():
+    # observe -> act: every assistant message is immediately preceded by an
+    # [observation] user message carrying that step's OWN page. There is one
+    # observation per step (5 steps) plus the single TASK GOAL user message.
     msgs = _traj()["messages"]
-    obs = [m for m in msgs if m["role"] == "user" and m["content"].startswith("[observation]")]
-    assert obs
-    assert any("url=https://example.service-now.com/home" in m["content"] for m in obs)
-    assert all(m["tool_calls"] == [] for m in obs)
+    user_msgs = [m for m in msgs if m["role"] == "user"]
+    obs_msgs = [m for m in msgs if m["content"].startswith("[observation]")]
+    assert len(user_msgs) == 6  # goal + 5 observations
+    assert len(obs_msgs) == 5
+    for idx, m in enumerate(msgs):
+        if m["role"] == "assistant":
+            prev = msgs[idx - 1]
+            assert prev["role"] == "user"
+            assert prev["content"].startswith("[observation]")
 
 
-def test_terminal_end_message_present():
+def test_terminal_step_observation_then_end_message():
     msgs = _traj()["messages"]
-    ends = [m for m in msgs if m["role"] == "assistant" and m["content"].startswith("(episode end")]
+    ends = [
+        (idx, m)
+        for idx, m in enumerate(msgs)
+        if m["role"] == "assistant" and m["content"].startswith("(episode end")
+    ]
     assert len(ends) == 1
-    assert "reward=1" in ends[0]["content"]
-    assert "terminated=True" in ends[0]["content"]
-    assert ends[0]["tool_calls"] == []
+    idx, end = ends[0]
+    assert "reward=1" in end["content"]
+    assert "terminated=True" in end["content"]
+    assert end["tool_calls"] == []
+    # the episode-end message is the LAST message.
+    assert idx == len(msgs) - 1
+    # the terminal step's OWN final page precedes the end message.
+    obs = msgs[idx - 1]
+    assert obs["role"] == "user"
+    assert obs["content"].startswith("[observation]")
+    assert "url=https://example.service-now.com/list.do" in obs["content"]
 
 
 def test_round_trips_through_json():

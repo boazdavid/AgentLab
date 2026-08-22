@@ -84,20 +84,34 @@ def get_articles(slugs: list):
     raise Exception("WIKI ARTICLES:\n" + text)
 
 
+# Name -> function registry. WikiActionSetArgs stores a tuple of NAMES (not raw
+# callables) so it stays deepcopy/pickle-serializable — AgentLab deepcopies the
+# action-set args in set_benchmark.
+_ACTIONS = {"query_articles": query_articles, "get_articles": get_articles}
+
+
 @dataclass
 class WikiActionSetArgs(HighLevelActionSetArgs):
-    """HighLevelActionSetArgs that wires in the two wiki retrieval custom actions.
+    """HighLevelActionSetArgs that wires in a SUBSET of the wiki retrieval actions.
 
     Use ``"custom"`` as one of the ``subsets`` (e.g. ``("workarena", "custom")``)
     so the base HighLevelActionSet includes the custom_actions.
+
+    ``action_names`` selects which of the module-level actions to expose. It is a
+    tuple of NAMES (not callables) so the dataclass stays serializable through the
+    deepcopy AgentLab performs in ``set_benchmark``. The default exposes both
+    (backward compatible). Index-batch uses ``action_names=("get_articles",)``.
     """
+
+    action_names: tuple = ("query_articles", "get_articles")
 
     def make_action_set(self):
         from browsergym.core.action.highlevel import HighLevelActionSet
 
+        custom_actions = [_ACTIONS[name] for name in self.action_names]
         return HighLevelActionSet(
             subsets=self.subsets,
-            custom_actions=[query_articles, get_articles],
+            custom_actions=custom_actions,
             multiaction=self.multiaction,
             strict=self.strict,
             retry_with_force=self.retry_with_force,

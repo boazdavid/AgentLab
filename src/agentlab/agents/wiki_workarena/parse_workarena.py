@@ -153,15 +153,28 @@ def _strip_wiki_marker(text):
     return text
 
 
-def _outcome(action_name, next_error):
-    """Compute (success, error_text, response) from the NEXT step's error.
+def _outcome(action_name, next_step):
+    """Compute (success, error_text, response) for an action from the NEXT step.
 
-    - Retrieval actions: wiki text arrives via ``next_error`` starting with a
-      WIKI marker -> success, response = the (marker-stripped) text.
-    - Other actions: a non-empty ``next_error`` that is not a WIKI marker is a
-      real failure.
-    - No next step / empty error -> success.
+    The success/error signal for the action at step ``i`` is carried by step
+    ``i+1``'s ``last_action_error``. ``next_step`` is that following step dict
+    (or ``None`` when the acting step is the last one).
+
+    - No next step -> ``(True, None, None)``.
+    - Retrieval action (query_articles/get_articles) whose ``next_step`` error
+      starts with a WIKI marker: wiki text was delivered -> success, response =
+      the (marker-stripped) text. Response STILL carries the wiki text for
+      retrieval — that genuinely is the tool's result the agent reads.
+    - A non-empty ``next_step`` error that is not a WIKI marker is a real
+      failure -> ``(False, error, None)``.
+    - Otherwise a successful regular browser action -> ``(True, None, None)``.
+      Its observation is NOT put in the response; the page the agent saw lives
+      in the ``[observation]`` user message that PRECEDES the action.
     """
+    if next_step is None:
+        return True, None, None
+
+    next_error = next_step.get("last_action_error")
     nxt = (next_error or "").strip() if next_error is not None else ""
     is_wiki = any(nxt.startswith(m) for m in _WIKI_MARKERS)
 
@@ -169,17 +182,8 @@ def _outcome(action_name, next_error):
         return True, None, _strip_wiki_marker(nxt)
     if nxt and not is_wiki:
         return False, nxt, None
+
     return True, None, None
-
-
-def _observation_message(step):
-    url = step.get("url") or ""
-    axtree_head = step.get("axtree_head") or ""
-    return {
-        "role": "user",
-        "content": f"[observation] url={url}\n{axtree_head}",
-        "tool_calls": [],
-    }
 
 
 def episode_to_trajectory_dict(goal, steps, file_path):
@@ -193,10 +197,22 @@ def episode_to_trajectory_dict(goal, steps, file_path):
 
     for i, step in enumerate(steps):
         action_name = step.get("action_name")
-        next_error = steps[i + 1].get("last_action_error") if i + 1 < len(steps) else None
+        next_step = steps[i + 1] if i + 1 < len(steps) else None
+
+        # observe -> act: emit the step's OWN observation (the page the agent
+        # saw to DECIDE this step's action) as a user message BEFORE the action.
+        url = step.get("url") or ""
+        axtree_head = step.get("axtree_head") or ""
+        messages.append(
+            {
+                "role": "user",
+                "content": f"[observation] url={url}\n{axtree_head}",
+                "tool_calls": [],
+            }
+        )
 
         if action_name:
-            success, error_text, response = _outcome(action_name, next_error)
+            success, error_text, response = _outcome(action_name, next_step)
             tool_call = {
                 "tool_name": action_name,
                 "args": _named_args(action_name, step.get("action_args")),
@@ -221,8 +237,6 @@ def episode_to_trajectory_dict(goal, steps, file_path):
                     "tool_calls": [],
                 }
             )
-
-        messages.append(_observation_message(step))
 
     return {
         "file_path": file_path,
