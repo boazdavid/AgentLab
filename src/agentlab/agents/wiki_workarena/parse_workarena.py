@@ -227,22 +227,14 @@ def episode_to_trajectory_dict(goal, steps, file_path):
                     "tool_calls": [tool_call],
                 }
             )
-        else:
-            reward = step.get("reward")
-            terminated = step.get("terminated")
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": f"(episode end — reward={reward}, terminated={terminated})",
-                    "tool_calls": [],
-                }
-            )
+        # Terminal step (no action) contributes only its observation (appended above).
+        # reward/terminated are deliberately EXCLUDED: they are benchmark ground-truth
+        # signals absent from real production agent logs, so they must not leak into the
+        # Trajectory (this also prevents the wiki builder from keying on the outcome).
 
     return {
         "file_path": file_path,
-        "system_prompt": "",
-        "tools": [],
-        "messages": messages,
+        "messages": messages,  # system_prompt/tools omitted -> Trajectory defaults ("", [])
     }
 
 

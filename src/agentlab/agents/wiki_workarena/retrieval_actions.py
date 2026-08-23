@@ -23,9 +23,12 @@ IMPORTANT runtime constraints (why the code looks the way it does):
     - the action raises a built-in ``Exception`` (never a custom class), because
       only builtins are guaranteed to resolve inside that exec namespace.
 * The raised message is caught by BrowserGym and surfaced to the agent on the
-  next step as ``last_action_error`` (rendered under "## Error from previous
-  action:"). This is the intended channel for returning retrieved text — it is
-  normal, not a failure.
+  next step as ``last_action_error``. This is the intended channel for returning
+  retrieved text — it is normal, not a failure. The wiki-knowledge agent
+  (``cached_agent.WikiAwareError``) detects the ``WIKI ...:`` marker prefix and
+  renders the payload under a result heading ("## Retrieved wiki articles:" /
+  "## Wiki search results:") rather than the misleading default
+  "## Error from previous action:".
 * Action arguments are ``repr()``-serialized then re-parsed, so they must be
   simple types (``str``, ``list[str]``).
 """
@@ -41,7 +44,7 @@ def query_articles(q: str):
     Describe the operation in natural language. Returns a short ranked list of
     matching articles (title + description + link target). Pick the relevant link
     targets, then call get_articles with them. The results are delivered on the
-    NEXT step under "## Error from previous action:" (this is normal, not an error).
+    NEXT step under "## Wiki search results:".
 
     Examples:
         query_articles("how to create an incident")
@@ -64,8 +67,7 @@ def get_articles(slugs: list):
     """Fetch the full bodies of several wiki articles at once (batch).
 
     Pass a list of link targets copied verbatim from query_articles output. The
-    article bodies are delivered on the NEXT step under "## Error from previous
-    action:" (this is normal, not an error).
+    article bodies are delivered on the NEXT step under "## Retrieved wiki articles:".
 
     Examples:
         get_articles(["concepts/create-incident.md", "concepts/assign-to-group.md"])

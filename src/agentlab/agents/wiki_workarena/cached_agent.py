@@ -33,6 +33,42 @@ from agentlab.agents.generic_agent.generic_agent_prompt import GenericPromptFlag
 from agentlab.llm.base_api import BaseModelArgs
 from agentlab.llm.llm_utils import SystemMessage
 
+# Marker prefix (raised by retrieval_actions.py) -> the observation heading the
+# agent should see for that payload. The retrieval actions can only hand text
+# back to the agent by raising an Exception, which BrowserGym surfaces as
+# ``last_action_error`` and dynamic_prompting's ``Error`` element renders under
+# "Error from previous action:". That heading is misleading for retrieved wiki
+# text (it is a result, not a failure), so WikiAwareError relabels marked
+# payloads. Order matters: the retrieval markers are the ONLY channel content we
+# relabel; everything else stays a real error.
+_WIKI_HEADINGS = {
+    "WIKI ARTICLES:": "Retrieved wiki articles:",
+    "WIKI SEARCH RESULTS:": "Wiki search results:",
+}
+
+
+class WikiAwareError(dp.Error):
+    """``dp.Error`` that renders retrieval payloads under a result heading.
+
+    ``dynamic_prompting.Observation``/``HistoryStep`` build their error section as
+    ``Error(obs["last_action_error"], ...)`` via a module-global name lookup, so
+    swapping ``dp.Error`` for this subclass (see ``CachedSystemAgent.get_action``)
+    transparently relabels the wiki-retrieval payload while leaving genuine
+    browser errors rendered as "Error from previous action:".
+    """
+
+    def __init__(self, error: str, visible: bool = True, prefix="", limit_logs=True) -> None:
+        text = error or ""
+        for marker, heading in _WIKI_HEADINGS.items():
+            if text.startswith(marker):
+                body = text[len(marker):].lstrip("\n")
+                # Skip dp.Error.__init__ (which hardcodes the error heading) and
+                # set the prompt directly; PromptElement.__init__ handles visibility.
+                dp.PromptElement.__init__(self, visible=visible)
+                self._prompt = f"\n{prefix}{heading}\n{body}\n"
+                return
+        super().__init__(error, visible=visible, prefix=prefix, limit_logs=limit_logs)
+
 
 class CachedSystemAgent(GenericAgent):
     """A ``GenericAgent`` that appends ``cached_system_suffix`` to the system prompt.
@@ -65,13 +101,19 @@ class CachedSystemAgent(GenericAgent):
     def get_action(self, obs):
         # Temporarily augment the single line generic_agent.get_action reads:
         #   system_prompt = SystemMessage(dp.SystemPrompt().prompt)
-        # then delegate so all other get_action logic is inherited unchanged.
+        # and swap dp.Error so the Observation/HistoryStep error section relabels
+        # wiki-retrieval payloads (see WikiAwareError). Both are module-global name
+        # lookups inside dynamic_prompting, so the swaps take effect for this call
+        # only; delegate so all other get_action logic is inherited unchanged.
         original_prompt = dp.SystemPrompt._prompt
+        original_error = dp.Error
         try:
             dp.SystemPrompt._prompt = self._augmented_system_prompt_text()
+            dp.Error = WikiAwareError
             return super().get_action(obs)
         finally:
             dp.SystemPrompt._prompt = original_prompt
+            dp.Error = original_error
 
 
 @dataclass

@@ -7,7 +7,7 @@ You have access to an internal knowledge base of enterprise concepts — procedu
 
 ## How results are delivered (important)
 
-`query_articles` and `get_articles` do not change the page. Their output is delivered to you on the **NEXT step**, shown under the heading "## Error from previous action:". **This is normal, not a failure** — it is simply how the retrieved text is returned to you. Read that text and continue.
+`query_articles` and `get_articles` do not change the page. Their output is delivered to you on the **NEXT step**: `query_articles` under "## Wiki search results:" and `get_articles` under "## Retrieved wiki articles:". Read that text and continue.
 
 ## Workflow
 

@@ -96,10 +96,9 @@ def _traj():
 
 def test_top_level_schema_fields():
     t = _traj()
-    assert set(t.keys()) == {"file_path", "system_prompt", "tools", "messages"}
+    # minimal emit: system_prompt/tools are omitted and default ("", []) on the Trajectory model.
+    assert set(t.keys()) == {"file_path", "messages"}
     assert t["file_path"] == "episodes/task_43"
-    assert t["system_prompt"] == ""
-    assert t["tools"] == []
     assert isinstance(t["messages"], list)
 
 
@@ -191,25 +190,19 @@ def test_observation_precedes_every_assistant_message():
             assert prev["content"].startswith("[observation]")
 
 
-def test_terminal_step_observation_then_end_message():
+def test_terminal_step_observation_no_reward_leak():
     msgs = _traj()["messages"]
-    ends = [
-        (idx, m)
-        for idx, m in enumerate(msgs)
-        if m["role"] == "assistant" and m["content"].startswith("(episode end")
-    ]
-    assert len(ends) == 1
-    idx, end = ends[0]
-    assert "reward=1" in end["content"]
-    assert "terminated=True" in end["content"]
-    assert end["tool_calls"] == []
-    # the episode-end message is the LAST message.
-    assert idx == len(msgs) - 1
-    # the terminal step's OWN final page precedes the end message.
-    obs = msgs[idx - 1]
-    assert obs["role"] == "user"
-    assert obs["content"].startswith("[observation]")
-    assert "url=https://example.service-now.com/list.do" in obs["content"]
+    # reward/terminated are benchmark ground-truth, absent from production logs, so they
+    # must NEVER appear anywhere in the Trajectory (no "(episode end …)" message either).
+    for m in msgs:
+        assert "reward=" not in m["content"]
+        assert "terminated=" not in m["content"]
+        assert "(episode end" not in m["content"]
+    # the terminal step contributes only its final observation, which is the LAST message.
+    last = msgs[-1]
+    assert last["role"] == "user"
+    assert last["content"].startswith("[observation]")
+    assert "url=https://example.service-now.com/list.do" in last["content"]
 
 
 def test_round_trips_through_json():
