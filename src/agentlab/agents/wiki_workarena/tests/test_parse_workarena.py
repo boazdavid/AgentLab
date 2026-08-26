@@ -134,8 +134,9 @@ def test_click_step_named_args_and_reasoning():
     assert "<action>" not in a["content"]
     assert len(a["tool_calls"]) == 1
     tc = a["tool_calls"][0]
+    # No action_target on this step -> base name; the ephemeral bid is dropped.
     assert tc["tool_name"] == "click"
-    assert tc["args"] == {"bid": "79"}
+    assert tc["args"] == {}
     # regular browser action success: response is None — the observation the
     # agent saw lives in the PRECEDING user message (message[1]), not here.
     assert tc["success"] is True
@@ -146,7 +147,8 @@ def test_click_step_named_args_and_reasoning():
 
 def test_fill_step_named_args():
     tc = _find_first_toolcall(_traj(), "fill")
-    assert tc["args"] == {"bid": "242", "value": "Configuration"}
+    # bid dropped; the meaningful value is kept.
+    assert tc["args"] == {"value": "Configuration"}
 
 
 def test_real_error_marks_failure():
@@ -231,3 +233,58 @@ def _assistant_for_toolcall(traj, tool_name, occurrence=0):
                     return m
                 seen += 1
     raise AssertionError(f"no assistant msg #{occurrence} for {tool_name}")
+
+
+# --- element-target enrichment (resolves acted bid -> role/name) --------------
+
+from agentlab.agents.wiki_workarena.parse_workarena import (
+    resolve_bid_target,
+    episode_to_trajectory_dict as _e2t,
+)
+
+AXTREE = (
+    "RootWebArea 'Create PRB'\n"
+    "\t[47] generic, live='assertive'\n"
+    "\t[a484] textbox 'Short description', required, focused\n"
+    "\t[79] button 'All', clickable"
+)
+
+
+def test_resolve_bid_target_extracts_role_and_name():
+    assert resolve_bid_target(AXTREE, "a484") == {"role": "textbox", "name": "Short description"}
+    assert resolve_bid_target(AXTREE, "79") == {"role": "button", "name": "All"}
+
+
+def test_resolve_bid_target_missing_bid_returns_none():
+    assert resolve_bid_target(AXTREE, "999") is None
+
+
+def test_action_target_emitted_into_args():
+    steps = [{
+        "think": "<action>\nfill('a484', 'DB down')\n</action>",
+        "action": "fill('a484', 'DB down')",
+        "action_name": "fill",
+        "action_args": {"args": ["a484", "DB down"]},
+        "url": "https://x/now/nav/ui/classic/params/target/problem.do",
+        "axtree_head": "RootWebArea 'Create PRB'",
+        "action_target": {"role": "textbox", "name": "Short description"},
+        "last_action_error": None,
+    }]
+    traj = _e2t("create a problem", steps, "f.json")
+    # The action is baked into a semantic identity (path-only URL); bid + target_* dropped.
+    tc = _find_first_toolcall(
+        traj, "fill[textbox:Short description@/now/nav/ui/classic/params/target/problem.do]")
+    assert "bid" not in tc["args"]
+    assert "target_role" not in tc["args"]
+    assert tc["args"] == {"value": "DB down"}
+
+
+def test_no_action_target_leaves_args_unchanged():
+    steps = [{
+        "think": "<action>\nnoop(1500)\n</action>",
+        "action": "noop(1500)", "action_name": "noop",
+        "action_args": {"args": [1500]},
+        "url": "https://x", "axtree_head": "R", "last_action_error": None,
+    }]
+    tc = _find_first_toolcall(_e2t("g", steps, "f"), "noop")
+    assert "target_role" not in tc["args"]

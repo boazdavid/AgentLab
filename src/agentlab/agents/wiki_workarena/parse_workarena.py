@@ -28,6 +28,7 @@ import argparse
 import ast
 import json
 import os
+import re
 from pathlib import Path
 
 # Markers that the retrieval custom actions (retrieval_actions.py) prepend to
@@ -71,6 +72,57 @@ _ACTION_PARAMS = {
     "query_articles": ["q"],
     "get_articles": ["slugs"],
 }
+
+
+def resolve_bid_target(axtree_txt, bid):
+    """Resolve a browsergym ``bid`` to its element ``{"role", "name"}`` from an AX tree.
+
+    Accessibility-tree lines look like ``[a484] textbox 'Short description', required``.
+    Returns ``None`` when the bid is absent (e.g. resolved against a truncated tree).
+
+    This resolution MUST run against the FULL ``axtree_txt`` at capture time: acted
+    elements (form fields, buttons) usually sit deep in the tree, below the nav/header
+    that fills a truncated prefix, and browsergym namespaces sub-frame bids (``a484``).
+    Downstream consumers only see the acted element's semantics if we resolve here.
+    """
+    if not axtree_txt or bid is None:
+        return None
+    m = re.search(r"\[" + re.escape(str(bid)) + r"\]\s+([A-Za-z]+)(?:\s+'([^']*)')?", axtree_txt)
+    if not m:
+        return None
+    return {"role": m.group(1), "name": m.group(2) or ""}
+
+
+def _url_path(url):
+    """Path component of a URL: strip scheme+host and the volatile ``?query``.
+
+    Path-only keeps the action identity stable across the rotating ServiceNow hosts
+    (workarenapublic19/20/22/23) — the host is per-seed noise, the path is the page.
+    """
+    if not url:
+        return ""
+    u = url.split("?", 1)[0]
+    m = re.match(r"https?://[^/]+(/.*)$", u)
+    if m:
+        return m.group(1)
+    return u if u.startswith("/") else ""
+
+
+def _semantic_tool_name(action_name, target, url):
+    """Bake a bid-based browser action into a semantic identity: ``name[role:name@/path]``.
+
+    Owns the browser-specific translation at save time: the acted element (resolved
+    from the FULL AX tree) and the page path become a stable action key, so the
+    downstream try_wikis loader stays a dumb JSON reader and the gate stays generic.
+    Actions without a resolved target (noop, unresolved bid) keep the base name.
+    """
+    if not target:
+        return action_name
+    label = f"{target.get('role') or '?'}:{target.get('name') or ''}"
+    path = _url_path(url)
+    if path:
+        label += f"@{path}"
+    return f"{action_name}[{label}]"
 
 
 def _param_names(action_name):
@@ -213,9 +265,18 @@ def episode_to_trajectory_dict(goal, steps, file_path):
 
         if action_name:
             success, error_text, response = _outcome(action_name, next_step)
+            args = _named_args(action_name, step.get("action_args"))
+            # Bake the acted element (role/name, resolved from the FULL AX tree) and the
+            # page path into a semantic action identity, and DROP the ephemeral ``bid``
+            # (a per-render DOM handle — noise for process identity). The downstream
+            # try_wikis loader is then a dumb reader and the gate stays domain-agnostic.
+            target = step.get("action_target")
+            tool_name = _semantic_tool_name(action_name, target, url)
+            if isinstance(args, dict):
+                args = {k: v for k, v in args.items() if k != "bid"}
             tool_call = {
-                "tool_name": action_name,
-                "args": _named_args(action_name, step.get("action_args")),
+                "tool_name": tool_name,
+                "args": args,
                 "success": success,
                 "error_text": error_text,
                 "response": response,
@@ -285,12 +346,17 @@ def _parse_action(action_str):
         return None, []
 
 
-def load_episode(exp_dir, axtree_chars=2000):
+def load_episode(exp_dir, axtree_chars=None):
     """Load one episode from ``exp_dir`` into (goal, list[step dict]).
 
     Reads the pickled steps via browsergym's ``get_exp_result``. Each emitted
     step dict has the fields consumed by ``episode_to_trajectory_dict`` plus the
     raw ``action`` string and its parsed name/args.
+
+    ``axtree_chars=None`` (default) keeps the FULL accessibility tree in each
+    observation so the downstream ``extract`` stage sees the whole page, not just
+    a truncated prefix. Pass an int only to cap it (e.g. for cheap smoke runs).
+    The acted-element resolution always uses the full tree regardless.
     """
     from browsergym.experiments.loop import get_exp_result
 
@@ -310,14 +376,20 @@ def load_episode(exp_dir, axtree_chars=2000):
         action_str = getattr(si, "action", None)
         action_name, action_args = _parse_action(action_str)
         axtree = obs.get("axtree_txt") or ""
+        # Resolve the acted element against the FULL axtree (not the truncated head):
+        # the target usually sits deep in the tree, so head-only resolution misses it.
+        named = _named_args(action_name, action_args) if action_name else {}
+        bid = named.get("bid") or named.get("from_bid") if isinstance(named, dict) else None
+        action_target = resolve_bid_target(axtree, bid) if bid is not None else None
         steps.append(
             {
                 "think": agent_info.get("think") or "",
                 "action": action_str,
                 "action_name": action_name,
                 "action_args": action_args,
+                "action_target": action_target,
                 "url": obs.get("url") or "",
-                "axtree_head": axtree[:axtree_chars],
+                "axtree_head": axtree if axtree_chars is None else axtree[:axtree_chars],
                 "last_action_error": obs.get("last_action_error") or None,
                 "reward": getattr(si, "reward", 0),
                 "terminated": getattr(si, "terminated", None),
@@ -365,7 +437,8 @@ def main(argv=None):
     ap.add_argument("--study-dir", required=True, help="AgentLab study dir containing episode subdirs")
     ap.add_argument("--out-dir", required=True, help="where to write per-episode Trajectory JSON")
     ap.add_argument("--all", action="store_true", help="include failed episodes (default: successes only)")
-    ap.add_argument("--axtree-chars", type=int, default=2000, help="axtree_txt prefix length per step")
+    ap.add_argument("--axtree-chars", type=int, default=None,
+                    help="cap axtree_txt chars per step (default: None = full tree)")
     args = ap.parse_args(argv)
 
     out_dir = Path(args.out_dir)

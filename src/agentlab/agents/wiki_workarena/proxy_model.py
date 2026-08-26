@@ -20,6 +20,39 @@ from agentlab.llm.chat_api import ChatModel
 # SNOW_*, OPENAI_*, AGENTLAB_EXP_ROOT, HF token. Missing file is fine.
 load_dotenv(Path.home() / "Documents/GitHub/AgentLab/.env")
 
+# Use the OS trust store (e.g. macOS keychain) for TLS instead of certifi's bundle, so
+# the proxy's corporate/internal CA is trusted — matching `curl`. Without this the
+# openai/httpx client raises CERTIFICATE_VERIFY_FAILED ("unable to get local issuer")
+# and every call surfaces as a generic "Connection error", while curl to the same URL
+# succeeds. inject_into_ssl() patches the stdlib ssl module process-wide (covers Ray
+# workers that import this module to build the model). No-op if truststore is absent.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
+
+def _custom_headers():
+    """Parse ANTHROPIC_CUSTOM_HEADERS into a dict, or return {} if unset/empty.
+
+    Uses Claude Code's format: one ``Name: Value`` header per line (e.g.
+    ``x-context-guru-token: cg_live_xxx``). Blank lines and lines without a
+    colon are ignored.
+    """
+    raw = os.environ.get("ANTHROPIC_CUSTOM_HEADERS")
+    if not raw:
+        return {}
+    headers = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        headers[name.strip()] = value.strip()
+    return headers
+
 
 def _with_cache_control(messages):
     """Mark a cache breakpoint on the STABLE prefix (the system message).
@@ -115,13 +148,25 @@ class ProxyModelArgs(BaseModelArgs):
 
     def make_model(self):
         model_cls = ChatModel if os.environ.get("WA_CACHE") == "0" else CacheAwareChatModel
+        client_args: dict = {"base_url": os.environ["OPENAI_BASE_URL"]}  # ".../v1" or ".../anthropic"
+        headers = _custom_headers()
+        if headers:  # e.g. ANTHROPIC_CUSTOM_HEADERS="x-context-guru-token: cg_live_xxx"
+            client_args["default_headers"] = headers
+        # Auth may be carried by a custom header (e.g. contextguru) rather than the OpenAI
+        # api_key. The OpenAI SDK still requires a non-empty api_key string, so fall back to
+        # a placeholder when OPENAI_API_KEY is unset but custom headers provide auth.
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            if not headers:
+                raise KeyError("OPENAI_API_KEY unset and no ANTHROPIC_CUSTOM_HEADERS to auth with")
+            api_key = "header-auth"  # placeholder; real auth is in default_headers
         return model_cls(
             model_name=self.model_name,
-            api_key=os.environ["OPENAI_API_KEY"],
+            api_key=api_key,
             temperature=self.temperature,
             max_tokens=self.max_new_tokens,
             client_class=OpenAI,
-            client_args={"base_url": os.environ["OPENAI_BASE_URL"]},  # ".../v1"
+            client_args=client_args,
         )
 
 

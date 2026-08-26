@@ -34,12 +34,22 @@ from agentlab.agents.wiki_workarena.retrieval_actions import WikiActionSetArgs
 
 # Genuinely required for a live run. HF_TOKEN gates the gated WorkArena-Instances
 # pool, from which an instance is auto-allocated when SNOW_INSTANCE_* are unset.
+# Model auth is either OPENAI_API_KEY or a custom header (ANTHROPIC_CUSTOM_HEADERS,
+# e.g. the contextguru token) — see _missing_live_env().
 LIVE_ENV = [
     "OPENAI_BASE_URL",
-    "OPENAI_API_KEY",
     "AGENTLAB_EXP_ROOT",
     "HF_TOKEN",
 ]
+
+
+def _missing_live_env():
+    """Required live env vars that are unset. Model auth is satisfied by EITHER
+    OPENAI_API_KEY or ANTHROPIC_CUSTOM_HEADERS (header-based auth)."""
+    missing = [v for v in LIVE_ENV if not os.getenv(v)]
+    if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_CUSTOM_HEADERS"):
+        missing.append("OPENAI_API_KEY|ANTHROPIC_CUSTOM_HEADERS")
+    return missing
 # Optional: pin a specific ServiceNow instance instead of the managed pool. If any
 # is set, all three should be (Path B, bring-your-own-instance).
 SNOW_OPTIONAL_ENV = ["SNOW_INSTANCE_URL", "SNOW_INSTANCE_UNAME", "SNOW_INSTANCE_PWD"]
@@ -68,7 +78,7 @@ def main():
     ap.add_argument("--n-jobs", type=int, default=1)
     args = ap.parse_args()
 
-    missing = [v for v in LIVE_ENV if not os.getenv(v)]
+    missing = _missing_live_env()
 
     study, bench = _build_study(args.retrieval)
     pair = [(e.task_name, e.task_seed) for e in bench.env_args_list]
