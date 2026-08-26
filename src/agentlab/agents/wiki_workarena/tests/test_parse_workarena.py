@@ -303,3 +303,19 @@ def test_no_action_target_leaves_args_unchanged():
     }]
     tc = _find_first_toolcall(_e2t("g", steps, "f"), "noop")
     assert "target_role" not in tc["args"]
+
+
+def test_strip_axtree_noise_removes_plumbing_keeps_state():
+    from agentlab.agents.wiki_workarena.parse_workarena import _strip_axtree_noise
+    ax = (
+        "[47] generic, live='assertive', atomic, relevant='additions text'\n"
+        "[66] button 'My ServiceNow landing page', clickable, visible, describedby='logo-tooltip'\n"
+        "[a484] textbox 'Short description', required, focused, visible\n"
+        "[80] combobox 'Risk', expanded=False, visible"
+    )
+    assert _strip_axtree_noise(ax) == (
+        "[47] generic\n"
+        "[66] button 'My ServiceNow landing page'\n"
+        "[a484] textbox 'Short description', required\n"      # state prop kept
+        "[80] combobox 'Risk', expanded=False"                # state prop kept
+    )

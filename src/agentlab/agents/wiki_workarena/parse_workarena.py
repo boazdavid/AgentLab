@@ -122,6 +122,24 @@ def _page_basename(url):
     return seg.rsplit("/", 1)[-1] or seg
 
 
+# Screen-reader / plumbing a11y props that carry no page semantics — stripped from the
+# stored AX-tree to cut extract-stage tokens (~16% of observation text). State-bearing
+# props (required, disabled, checked, selected, expanded, readonly, invalid) and role +
+# name + value are KEPT. Truly hidden elements (display:none / aria-hidden) are already
+# absent from the AX tree, so there is no hidden-marker to preserve.
+_AXTREE_NOISE = re.compile(
+    r",\s*(?:live='[^']*'|relevant='[^']*'|describedby='[^']*'"
+    r"|(?:atomic|focused|clickable|visible)(?=,|$))"
+)
+
+
+def _strip_axtree_noise(axtree):
+    """Remove ignorable a11y plumbing (see _AXTREE_NOISE) line by line; keep everything else."""
+    if not axtree:
+        return axtree
+    return "\n".join(_AXTREE_NOISE.sub("", line) for line in axtree.split("\n"))
+
+
 def _semantic_tool_name(action_name, target):
     """Bake a bid-based browser action into a semantic identity: ``name[role:name]``.
 
@@ -276,7 +294,7 @@ def episode_to_trajectory_dict(goal, steps, file_path):
         # observe -> act: emit the step's OWN observation (the page the agent
         # saw to DECIDE this step's action) as a user message BEFORE the action.
         url = step.get("url") or ""
-        axtree_head = step.get("axtree_head") or ""
+        axtree_head = _strip_axtree_noise(step.get("axtree_head") or "")
         messages.append(
             {
                 "role": "user",
