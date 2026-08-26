@@ -108,20 +108,32 @@ def _url_path(url):
     return u if u.startswith("/") else ""
 
 
-def _semantic_tool_name(action_name, target, url):
-    """Bake a bid-based browser action into a semantic identity: ``name[role:name@/path]``.
+def _page_basename(url):
+    """The entry-page basename for the ``open[...]`` start node, e.g. ``incident_list.do``.
 
-    Owns the browser-specific translation at save time: the acted element (resolved
-    from the FULL AX tree) and the page path become a stable action key, so the
-    downstream try_wikis loader stays a dumb JSON reader and the gate stays generic.
-    Actions without a resolved target (noop, unresolved bid) keep the base name.
+    Strips scheme/host, path prefix, and both raw (``?``) and URL-encoded (``%3F``) query
+    strings — those carry per-run search terms and sys_ids, pure noise. ``/now/nav/ui/home``
+    → ``home``. Returns "" when no url.
+    """
+    path = _url_path(url)
+    if not path:
+        return ""
+    seg = path.split("%3F")[0].split("?")[0].rstrip("/")
+    return seg.rsplit("/", 1)[-1] or seg
+
+
+def _semantic_tool_name(action_name, target):
+    """Bake a bid-based browser action into a semantic identity: ``name[role:name]``.
+
+    Owns the browser-specific translation at save time: the acted element (resolved from
+    the FULL AX tree) becomes a stable action key, so the downstream try_wikis loader stays
+    a dumb JSON reader and the gate stays generic. The page is NOT folded in per-action (it
+    adds no discrimination and carries URL noise); the entry surface is captured once by the
+    ``open[...]`` start node instead. Actions without a resolved target keep the base name.
     """
     if not target:
         return action_name
     label = f"{target.get('role') or '?'}:{target.get('name') or ''}"
-    path = _url_path(url)
-    if path:
-        label += f"@{path}"
     return f"{action_name}[{label}]"
 
 
@@ -247,6 +259,16 @@ def episode_to_trajectory_dict(goal, steps, file_path):
         {"role": "user", "content": f"TASK GOAL: {goal}", "tool_calls": []}
     ]
 
+    # Entry surface as a synthetic "zero action": where the browser starts, captured once
+    # (e.g. open[incident_list.do]), instead of repeating the page on every action.
+    entry = _page_basename(steps[0].get("url") or "") if steps else ""
+    if entry:
+        messages.append({
+            "role": "assistant", "content": "",
+            "tool_calls": [{"tool_name": f"open[{entry}]", "args": {},
+                            "success": True, "error_text": None, "response": None}],
+        })
+
     for i, step in enumerate(steps):
         action_name = step.get("action_name")
         next_step = steps[i + 1] if i + 1 < len(steps) else None
@@ -266,12 +288,12 @@ def episode_to_trajectory_dict(goal, steps, file_path):
         if action_name:
             success, error_text, response = _outcome(action_name, next_step)
             args = _named_args(action_name, step.get("action_args"))
-            # Bake the acted element (role/name, resolved from the FULL AX tree) and the
-            # page path into a semantic action identity, and DROP the ephemeral ``bid``
-            # (a per-render DOM handle — noise for process identity). The downstream
-            # try_wikis loader is then a dumb reader and the gate stays domain-agnostic.
+            # Bake the acted element (role/name, resolved from the FULL AX tree) into a
+            # semantic action identity, and DROP the ephemeral ``bid`` (a per-render DOM
+            # handle — noise for process identity). The downstream try_wikis loader is then
+            # a dumb reader and the gate stays domain-agnostic.
             target = step.get("action_target")
-            tool_name = _semantic_tool_name(action_name, target, url)
+            tool_name = _semantic_tool_name(action_name, target)
             if isinstance(args, dict):
                 args = {k: v for k, v in args.items() if k != "bid"}
             tool_call = {

@@ -109,26 +109,37 @@ def test_first_message_is_task_goal():
     assert m0["tool_calls"] == []
 
 
+def test_entry_open_node_emitted_first():
+    # message[1] is the synthetic entry node: where the browser starts, captured once.
+    msgs = _traj()["messages"]
+    assert msgs[0]["content"].startswith("TASK GOAL:")
+    open_tc = msgs[1]["tool_calls"][0]
+    assert msgs[1]["role"] == "assistant"
+    assert open_tc["tool_name"] == "open[home]"   # from steps[0] url .../home
+    assert open_tc["args"] == {}
+
+
 def test_first_action_is_preceded_by_observation():
     # KEY FIX: each step's OWN observation is emitted as a user message BEFORE
     # that step's assistant action — including the very first action.
     msgs = _traj()["messages"]
-    # message[1] is the observation the agent SAW to decide step 0's action.
-    m1 = msgs[1]
-    assert m1["role"] == "user"
-    assert m1["content"].startswith("[observation]")
-    assert "url=https://example.service-now.com/home" in m1["content"]
-    assert "RootWebArea 'Home'" in m1["content"]
-    assert m1["tool_calls"] == []
-    # message[2] is the first assistant action, immediately AFTER the observation.
-    assert msgs[2]["role"] == "assistant"
-    assert msgs[2]["tool_calls"][0]["tool_name"] == "click"
+    # message[2] is the observation the agent SAW to decide step 0's action
+    # (message[1] is the synthetic open[...] entry node).
+    m2 = msgs[2]
+    assert m2["role"] == "user"
+    assert m2["content"].startswith("[observation]")
+    assert "url=https://example.service-now.com/home" in m2["content"]
+    assert "RootWebArea 'Home'" in m2["content"]
+    assert m2["tool_calls"] == []
+    # message[3] is the first real assistant action, immediately AFTER the observation.
+    assert msgs[3]["role"] == "assistant"
+    assert msgs[3]["tool_calls"][0]["tool_name"] == "click"
 
 
 def test_click_step_named_args_and_reasoning():
     msgs = _traj()["messages"]
-    # message[2] is the assistant for step 0 (click); message[1] is its observation.
-    a = msgs[2]
+    # message[3] is the assistant for step 0 (click); message[2] is its observation.
+    a = msgs[3]
     assert a["role"] == "assistant"
     assert a["content"] == "I should open the app navigator."
     assert "<action>" not in a["content"]
@@ -142,7 +153,7 @@ def test_click_step_named_args_and_reasoning():
     assert tc["success"] is True
     assert tc["error_text"] is None
     assert tc["response"] is None
-    assert "url=https://example.service-now.com/home" in msgs[1]["content"]
+    assert "url=https://example.service-now.com/home" in msgs[2]["content"]
 
 
 def test_fill_step_named_args():
@@ -187,6 +198,10 @@ def test_observation_precedes_every_assistant_message():
     assert len(obs_msgs) == 5
     for idx, m in enumerate(msgs):
         if m["role"] == "assistant":
+            # the synthetic open[...] entry node is the one assistant with no preceding
+            # observation (it IS the initial navigation); every real action has one.
+            if m["tool_calls"] and m["tool_calls"][0]["tool_name"].startswith("open["):
+                continue
             prev = msgs[idx - 1]
             assert prev["role"] == "user"
             assert prev["content"].startswith("[observation]")
@@ -271,9 +286,9 @@ def test_action_target_emitted_into_args():
         "last_action_error": None,
     }]
     traj = _e2t("create a problem", steps, "f.json")
-    # The action is baked into a semantic identity (path-only URL); bid + target_* dropped.
-    tc = _find_first_toolcall(
-        traj, "fill[textbox:Short description@/now/nav/ui/classic/params/target/problem.do]")
+    # The action is baked into a semantic identity (role:name only, no per-action path);
+    # bid + target_* dropped.
+    tc = _find_first_toolcall(traj, "fill[textbox:Short description]")
     assert "bid" not in tc["args"]
     assert "target_role" not in tc["args"]
     assert tc["args"] == {"value": "DB down"}
