@@ -5,7 +5,7 @@ Two arms, run on the IDENTICAL test pairs:
 * ``control``   — stock GenericAgent, stock benchmark action set.
 * ``retrieval`` — the INDEX-BATCH arm (6b): the full wiki catalog (index.md) is
   injected into the agent preamble via ``extra_instructions`` and the agent gets
-  ONE extra action, ``get_articles([slugs])`` (no query_articles, no embedding).
+  ONE extra action, ``get_memories([slugs])`` (no query_memories, no embedding).
 
 Usage:
     python -m agentlab.agents.wiki_workarena.run_test_arms \
@@ -35,7 +35,7 @@ def build_arm(arm, test_pairs, wiki_dir=None, max_steps=15):
     """Return ``(agent_args, benchmark)`` for one arm. Pure construction (no run).
 
     * ``control``   — stock flags, stock benchmark action set.
-    * ``retrieval`` — WikiActionSetArgs exposing ONLY get_articles + the wiki
+    * ``retrieval`` — WikiActionSetArgs exposing ONLY get_memories + the wiki
       index.md catalog injected into the CACHED system prompt (via
       ``CachedSystemAgentArgs.cached_system_suffix``) rather than the volatile
       human message. The catalog text is identical to before — only its location
@@ -53,7 +53,7 @@ def build_arm(arm, test_pairs, wiki_dir=None, max_steps=15):
             raise ValueError("retrieval arm requires --wiki-dir (for index.md)")
         bench.high_level_action_set_args = WikiActionSetArgs(
             subsets=("workarena", "custom"),
-            action_names=("get_articles",),
+            action_names=("get_memories",),
             multiaction=False,
         )
         flags.use_past_error_logs = True
@@ -99,7 +99,7 @@ def main():
 
     arms = ["control", "retrieval"] if args.arm == "both" else [args.arm]
     if "retrieval" in arms:
-        # The exec'd get_articles action reads KNOWLEDGE_URL from the environment.
+        # The exec'd get_memories action reads KNOWLEDGE_URL from the environment.
         os.environ["KNOWLEDGE_URL"] = args.knowledge_url
         print(f"KNOWLEDGE_URL {args.knowledge_url}")
 

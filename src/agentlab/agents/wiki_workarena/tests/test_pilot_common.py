@@ -1,24 +1,22 @@
 """Tests for the pilot helpers: index-preamble rendering and pair selection."""
 
-from agentlab.agents.wiki_workarena.pilot_common import (
-    render_index_preamble,
-    resolve_pilot_ids,
-    select_pairs,
-)
+from agentlab.agents.wiki_workarena.pilot_common import (render_index_preamble,
+                                                         resolve_pilot_ids,
+                                                         select_pairs)
 
 
 def test_render_index_preamble_injects_catalog(tmp_path):
     wiki = tmp_path / "wiki"
     wiki.mkdir()
     (wiki / "index.md").write_text(
-        "- [Create an incident](concepts/create-incident.md) — how to create one\n",
+        "- [Create an incident](memories/create-incident.md) — how to create one\n",
         encoding="utf-8",
     )
     out = render_index_preamble(wiki)
     assert "{{INDEX_MD}}" not in out  # placeholder consumed
-    assert "concepts/create-incident.md" in out  # fake catalog present
-    assert "get_articles" in out  # index-batch action mentioned
-    assert "query_articles" not in out  # no search action in this arm
+    assert "memories/create-incident.md" in out  # fake catalog present
+    assert "get_memories" in out  # index-batch action mentioned
+    assert "query_memories" not in out  # no search action in this arm
 
 
 def test_select_pairs_single_task():

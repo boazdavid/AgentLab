@@ -14,10 +14,8 @@ from copy import deepcopy
 
 from agentlab.agents import dynamic_prompting as dp
 from agentlab.agents.generic_agent.agent_configs import FLAGS_GPT_4o
-from agentlab.agents.wiki_workarena.cached_agent import (
-    CachedSystemAgent,
-    CachedSystemAgentArgs,
-)
+from agentlab.agents.wiki_workarena.cached_agent import (CachedSystemAgent,
+                                                         CachedSystemAgentArgs)
 from agentlab.agents.wiki_workarena.proxy_model import PROXY_MODEL_ARGS
 from agentlab.agents.wiki_workarena.retrieval_actions import WikiActionSetArgs
 from agentlab.agents.wiki_workarena.run_test_arms import build_arm
@@ -27,7 +25,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("OPENAI_BASE_URL", "http://127.0.0.1:65535/v1")
 os.environ.setdefault("WA_CACHE", "0")  # plain ChatModel, no cache wrapper needed offline
 
-SENTINEL = "WIKI-CATALOG-SENTINEL concepts/create-incident.md"
+SENTINEL = "WIKI-CATALOG-SENTINEL memories/create-incident.md"
 
 
 def _make_cached_agent(suffix):
@@ -77,7 +75,7 @@ def test_get_action_restores_global_system_prompt():
 def _fake_wiki(tmp_path):
     wiki = tmp_path / "wiki"
     wiki.mkdir()
-    (wiki / "index.md").write_text("- [x](concepts/x.md) — x\n", encoding="utf-8")
+    (wiki / "index.md").write_text("- [x](memories/x.md) — x\n", encoding="utf-8")
     return wiki
 
 
@@ -87,15 +85,15 @@ def test_retrieval_arm_roundtrips_set_benchmark_with_wiki_action_set(tmp_path):
     agent_args, bench = build_arm("retrieval", pairs, wiki_dir=_fake_wiki(tmp_path))
 
     assert isinstance(agent_args, CachedSystemAgentArgs)
-    assert "concepts/x.md" in agent_args.cached_system_suffix
+    assert "memories/x.md" in agent_args.cached_system_suffix
 
     # Emulate AgentLab's set_benchmark (deepcopies bench.high_level_action_set_args).
     agent_args.set_benchmark(bench, demo_mode=False)
 
     action_set = agent_args.flags.action.action_set
     assert isinstance(action_set, WikiActionSetArgs)
-    assert action_set.action_names == ("get_articles",)
+    assert action_set.action_names == ("get_memories",)
 
     aset = action_set.make_action_set()
-    assert "def get_articles" in aset.python_includes
-    assert "def query_articles" not in aset.python_includes
+    assert "def get_memories" in aset.python_includes
+    assert "def query_memories" not in aset.python_includes

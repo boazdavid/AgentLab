@@ -19,8 +19,8 @@ from unittest import mock
 import pytest
 
 from agentlab.agents.wiki_workarena.retrieval_actions import (
-    query_articles,
-    get_articles,
+    query_memories,
+    get_memories,
     WikiActionSetArgs,
 )
 
@@ -34,26 +34,26 @@ def _fake_urlopen(payload: dict):
     return _open
 
 
-def test_query_articles_raises_builtin_with_text():
+def test_query_memories_raises_builtin_with_text():
     with mock.patch("urllib.request.urlopen", _fake_urlopen({"text": "INDEX ROWS..."})):
         with pytest.raises(Exception) as excinfo:
-            query_articles("create incident")
+            query_memories("create incident")
     # Must be a plain built-in Exception (exec namespace has no custom classes).
     assert type(excinfo.value) is Exception
     assert "WIKI SEARCH RESULTS:" in str(excinfo.value)
     assert "INDEX ROWS..." in str(excinfo.value)
 
 
-def test_get_articles_raises_builtin_with_text():
+def test_get_memories_raises_builtin_with_text():
     with mock.patch("urllib.request.urlopen", _fake_urlopen({"text": "BODY OF ARTICLE"})):
         with pytest.raises(Exception) as excinfo:
-            get_articles(["create-incident", "assign-to-group"])
+            get_memories(["create-incident", "assign-to-group"])
     assert type(excinfo.value) is Exception
     assert "WIKI ARTICLES:" in str(excinfo.value)
     assert "BODY OF ARTICLE" in str(excinfo.value)
 
 
-def test_query_articles_posts_expected_payload():
+def test_query_memories_posts_expected_payload():
     captured = {}
 
     def _open(req, timeout=None):
@@ -64,14 +64,14 @@ def test_query_articles_posts_expected_payload():
 
     with mock.patch("urllib.request.urlopen", _open):
         with pytest.raises(Exception):
-            query_articles("how to create an incident")
+            query_memories("how to create an incident")
 
-    assert captured["url"].endswith("/query_articles")
+    assert captured["url"].endswith("/query_memories")
     assert json.loads(captured["body"]) == {"q": "how to create an incident"}
     assert captured["ctype"] == "application/json"
 
 
-def test_get_articles_posts_slugs_payload():
+def test_get_memories_posts_memory_slugs_payload():
     captured = {}
 
     def _open(req, timeout=None):
@@ -81,10 +81,10 @@ def test_get_articles_posts_slugs_payload():
 
     with mock.patch("urllib.request.urlopen", _open):
         with pytest.raises(Exception):
-            get_articles(["a", "b"])
+            get_memories(["a", "b"])
 
-    assert captured["url"].endswith("/get_articles")
-    assert json.loads(captured["body"]) == {"slugs": ["a", "b"]}
+    assert captured["url"].endswith("/get_memories")
+    assert json.loads(captured["body"]) == {"memory_slugs": ["a", "b"]}
 
 
 def test_knowledge_url_env_override(monkeypatch):
@@ -97,43 +97,43 @@ def test_knowledge_url_env_override(monkeypatch):
 
     with mock.patch("urllib.request.urlopen", _open):
         with pytest.raises(Exception):
-            query_articles("x")
+            query_memories("x")
 
-    assert captured["url"] == "http://example.test:9000/query_articles"
+    assert captured["url"] == "http://example.test:9000/query_memories"
 
 
 def test_action_set_includes_custom_source():
     aset = WikiActionSetArgs(subsets=("workarena", "custom")).make_action_set()
     includes = aset.python_includes
     # getsource must have copied both action defs into the executable preamble.
-    assert "def query_articles" in includes
-    assert "def get_articles" in includes
+    assert "def query_memories" in includes
+    assert "def get_memories" in includes
     # Both actions are registered in the action set.
-    assert "query_articles" in aset.action_set
-    assert "get_articles" in aset.action_set
+    assert "query_memories" in aset.action_set
+    assert "get_memories" in aset.action_set
 
 
-def test_action_set_subset_only_get_articles():
-    """Index-batch arm exposes only get_articles, never query_articles."""
+def test_action_set_subset_only_get_memories():
+    """Index-batch arm exposes only get_memories, never query_memories."""
     aset = WikiActionSetArgs(
-        action_names=("get_articles",), subsets=("workarena", "custom")
+        action_names=("get_memories",), subsets=("workarena", "custom")
     ).make_action_set()
     includes = aset.python_includes
-    assert "def get_articles" in includes
-    assert "def query_articles" not in includes
-    assert "get_articles" in aset.action_set
-    assert "query_articles" not in aset.action_set
+    assert "def get_memories" in includes
+    assert "def query_memories" not in includes
+    assert "get_memories" in aset.action_set
+    assert "query_memories" not in aset.action_set
 
 
 def test_action_set_default_keeps_both():
     """Default action_names stays backward compatible (both actions present)."""
     aset = WikiActionSetArgs(subsets=("workarena", "custom")).make_action_set()
-    assert "def query_articles" in aset.python_includes
-    assert "def get_articles" in aset.python_includes
+    assert "def query_memories" in aset.python_includes
+    assert "def get_memories" in aset.python_includes
 
 
 def test_action_set_codegen_for_query():
     aset = WikiActionSetArgs(subsets=("workarena", "custom")).make_action_set()
-    code = aset.to_python_code('query_articles("create incident")')
-    assert "def query_articles" in code
-    assert 'query_articles(\'create incident\')' in code or 'query_articles("create incident")' in code
+    code = aset.to_python_code('query_memories("create incident")')
+    assert "def query_memories" in code
+    assert 'query_memories(\'create incident\')' in code or 'query_memories("create incident")' in code

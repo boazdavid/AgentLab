@@ -28,27 +28,34 @@ from agentlab.agents.generic_agent.agent_configs import FLAGS_GPT_4o
 from agentlab.agents.generic_agent.generic_agent import GenericAgentArgs
 from agentlab.experiments.study import make_study
 
-from agentlab.agents.wiki_workarena.proxy_model import PROXY_MODEL_ARGS
+from agentlab.agents.wiki_workarena.proxy_model import PROXY_MODEL_ARGS, _use_rits
 from agentlab.agents.wiki_workarena.splits import build_benchmark, split_pairs
 from agentlab.agents.wiki_workarena.retrieval_actions import WikiActionSetArgs
 
 # Genuinely required for a live run. HF_TOKEN gates the gated WorkArena-Instances
 # pool, from which an instance is auto-allocated when SNOW_INSTANCE_* are unset.
 # Model auth is either OPENAI_API_KEY or a custom header (ANTHROPIC_CUSTOM_HEADERS,
-# e.g. the contextguru token) — see _missing_live_env().
+# e.g. the contextguru token) — see _missing_live_env(). In RITS mode the endpoint
+# and auth come from RITS_API_KEY/RITS_BASE_URL instead of the OPENAI_* vars.
 LIVE_ENV = [
-    "OPENAI_BASE_URL",
     "AGENTLAB_EXP_ROOT",
     "HF_TOKEN",
 ]
 
 
 def _missing_live_env():
-    """Required live env vars that are unset. Model auth is satisfied by EITHER
-    OPENAI_API_KEY or ANTHROPIC_CUSTOM_HEADERS (header-based auth)."""
+    """Required live env vars that are unset. Model endpoint + auth are satisfied by
+    EITHER the RITS vars (RITS_API_KEY, in RITS mode) OR OPENAI_BASE_URL plus one of
+    OPENAI_API_KEY / ANTHROPIC_CUSTOM_HEADERS (proxy header-based auth)."""
     missing = [v for v in LIVE_ENV if not os.getenv(v)]
-    if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_CUSTOM_HEADERS"):
-        missing.append("OPENAI_API_KEY|ANTHROPIC_CUSTOM_HEADERS")
+    if _use_rits():
+        if not os.getenv("RITS_API_KEY"):
+            missing.append("RITS_API_KEY")
+    else:
+        if not os.getenv("OPENAI_BASE_URL"):
+            missing.append("OPENAI_BASE_URL")
+        if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_CUSTOM_HEADERS"):
+            missing.append("OPENAI_API_KEY|ANTHROPIC_CUSTOM_HEADERS")
     return missing
 # Optional: pin a specific ServiceNow instance instead of the managed pool. If any
 # is set, all three should be (Path B, bring-your-own-instance).
@@ -84,7 +91,7 @@ def main():
     pair = [(e.task_name, e.task_seed) for e in bench.env_args_list]
     aset = bench.high_level_action_set_args.make_action_set()
     # python_includes is a single source string; use plain containment (not per-item).
-    has_custom = "def query_articles" in aset.python_includes and "def get_articles" in aset.python_includes
+    has_custom = "def query_memories" in aset.python_includes and "def get_memories" in aset.python_includes
 
     print("=== WorkArena smoke: assembly ===")
     print(f"  episode           : {pair}")

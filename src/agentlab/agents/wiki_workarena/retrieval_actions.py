@@ -2,14 +2,14 @@
 
 Two extra high-level actions are exposed to the agent:
 
-- ``query_articles(q)`` — natural-language search over the wiki index.
-- ``get_articles(slugs)`` — batch-fetch full article bodies for a list of slugs.
+- ``query_memories(q)`` — natural-language search over the wiki index.
+- ``get_memories(memory_slugs)`` — batch-fetch full article bodies for a list of slugs.
 
 Both call the Task-7 HTTP shim (default ``http://127.0.0.1:8799``, override with
 the ``KNOWLEDGE_URL`` env var):
 
-    POST {KNOWLEDGE_URL}/query_articles  {"q": str}          -> {"text": str}
-    POST {KNOWLEDGE_URL}/get_articles     {"slugs": [str]}    -> {"text": str}
+    POST {KNOWLEDGE_URL}/query_memories  {"q": str}          -> {"text": str}
+    POST {KNOWLEDGE_URL}/get_memories     {"memory_slugs": [str]}    -> {"text": str}
 
 IMPORTANT runtime constraints (why the code looks the way it does):
 
@@ -38,16 +38,16 @@ from dataclasses import dataclass
 from browsergym.experiments.benchmark.base import HighLevelActionSetArgs
 
 
-def query_articles(q: str):
+def query_memories(q: str):
     """Search the wiki knowledge base for articles relevant to what you are trying to do.
 
     Describe the operation in natural language. Returns a short ranked list of
     matching articles (title + description + link target). Pick the relevant link
-    targets, then call get_articles with them. The results are delivered on the
+    targets, then call get_memories with them. The results are delivered on the
     NEXT step under "## Wiki search results:".
 
     Examples:
-        query_articles("how to create an incident")
+        query_memories("how to create an incident")
     """
     import json
     import os
@@ -55,7 +55,7 @@ def query_articles(q: str):
 
     url = os.environ.get("KNOWLEDGE_URL", "http://127.0.0.1:8799")
     req = urllib.request.Request(
-        url + "/query_articles",
+        url + "/query_memories",
         data=json.dumps({"q": q}).encode(),
         headers={"Content-Type": "application/json"},
     )
@@ -63,14 +63,14 @@ def query_articles(q: str):
     raise Exception("WIKI SEARCH RESULTS:\n" + text)
 
 
-def get_articles(slugs: list):
+def get_memories(memory_slugs: list):
     """Fetch the full bodies of several wiki articles at once (batch).
 
-    Pass a list of link targets copied verbatim from query_articles output. The
+    Pass a list of link targets copied verbatim from query_memories output. The
     article bodies are delivered on the NEXT step under "## Retrieved wiki articles:".
 
     Examples:
-        get_articles(["concepts/create-incident.md", "concepts/assign-to-group.md"])
+        get_memories(["memories/create-incident.md", "memories/assign-to-group.md"])
     """
     import json
     import os
@@ -78,8 +78,8 @@ def get_articles(slugs: list):
 
     url = os.environ.get("KNOWLEDGE_URL", "http://127.0.0.1:8799")
     req = urllib.request.Request(
-        url + "/get_articles",
-        data=json.dumps({"slugs": slugs}).encode(),
+        url + "/get_memories",
+        data=json.dumps({"memory_slugs": memory_slugs}).encode(),
         headers={"Content-Type": "application/json"},
     )
     text = json.load(urllib.request.urlopen(req, timeout=30))["text"]
@@ -89,7 +89,7 @@ def get_articles(slugs: list):
 # Name -> function registry. WikiActionSetArgs stores a tuple of NAMES (not raw
 # callables) so it stays deepcopy/pickle-serializable — AgentLab deepcopies the
 # action-set args in set_benchmark.
-_ACTIONS = {"query_articles": query_articles, "get_articles": get_articles}
+_ACTIONS = {"query_memories": query_memories, "get_memories": get_memories}
 
 
 @dataclass
@@ -102,10 +102,10 @@ class WikiActionSetArgs(HighLevelActionSetArgs):
     ``action_names`` selects which of the module-level actions to expose. It is a
     tuple of NAMES (not callables) so the dataclass stays serializable through the
     deepcopy AgentLab performs in ``set_benchmark``. The default exposes both
-    (backward compatible). Index-batch uses ``action_names=("get_articles",)``.
+    (backward compatible). Index-batch uses ``action_names=("get_memories",)``.
     """
 
-    action_names: tuple = ("query_articles", "get_articles")
+    action_names: tuple = ("query_memories", "get_memories")
 
     def make_action_set(self):
         from browsergym.core.action.highlevel import HighLevelActionSet

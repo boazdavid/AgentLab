@@ -35,7 +35,7 @@ from pathlib import Path
 # the text they deliver via the NEXT step's last_action_error. This is the
 # intended delivery channel for wiki text, NOT a failure.
 _WIKI_MARKERS = ("WIKI SEARCH RESULTS:", "WIKI ARTICLES:")
-_RETRIEVAL_ACTIONS = {"query_articles", "get_articles"}
+_RETRIEVAL_ACTIONS = {"query_memories", "get_memories"}
 
 # Positional parameter names for the common WorkArena/browsergym high-level
 # actions, in signature order. Used to turn positional action args into named
@@ -69,8 +69,8 @@ _ACTION_PARAMS = {
     "send_msg_to_user": ["text"],
     "report_infeasible": ["reason"],
     # wiki retrieval custom actions
-    "query_articles": ["q"],
-    "get_articles": ["slugs"],
+    "query_memories": ["q"],
+    "get_memories": ["memory_slugs"],
 }
 
 
@@ -243,7 +243,7 @@ def _outcome(action_name, next_step):
     (or ``None`` when the acting step is the last one).
 
     - No next step -> ``(True, None, None)``.
-    - Retrieval action (query_articles/get_articles) whose ``next_step`` error
+    - Retrieval action (query_memories/get_memories) whose ``next_step`` error
       starts with a WIKI marker: wiki text was delivered -> success, response =
       the (marker-stripped) text. Response STILL carries the wiki text for
       retrieval — that genuinely is the tool's result the agent reads.

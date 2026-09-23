@@ -35,6 +35,75 @@ except Exception:
     pass
 
 
+# RITS default endpoint for moonshotai/Kimi-K2.7-Code (one deployment == one model).
+# Override with RITS_BASE_URL to point at a different RITS deployment.
+DEFAULT_RITS_BASE_URL = (
+    "https://inference-3scale-apicast-production.apps.rits.fmaas.res.ibm.com/"
+    "moonshotai-kimi-k2-7/v1"
+)
+
+
+def _use_rits():
+    """Route through RITS when WA_RITS=1 (explicit), or when both RITS_API_KEY and
+    RITS_BASE_URL are set (implicit). RITS_API_KEY alone does NOT trigger it, so an
+    unrelated key in .env never hijacks the default proxy path."""
+    if os.environ.get("WA_RITS") == "1":
+        return True
+    return bool(os.environ.get("RITS_API_KEY") and os.environ.get("RITS_BASE_URL"))
+
+
+def _llm_log_path():
+    """``llm_calls.jsonl`` inside the current episode folder, so the per-call request/response
+    log lands next to step_*.pkl.gz / summary_info.json. The folder is published by
+    ExpArgs.run as AGENTLAB_CURRENT_EXP_DIR; returns None outside an episode (e.g. standalone
+    LLM calls), in which case nothing is logged."""
+    exp_dir = os.environ.get("AGENTLAB_CURRENT_EXP_DIR")
+    if exp_dir:
+        return os.path.join(exp_dir, "llm_calls.jsonl")
+    return None
+
+
+def _install_call_logger(model):
+    """Append the COMPLETE request and response (one JSON line per LLM call) to the episode
+    folder's ``llm_calls.jsonl``: ``{"request": <create kwargs: model, messages, params>,
+    "response": <resp.model_dump()>}``. Wraps the (possibly already-wrapped) create() so it
+    works in any cache mode. The destination is resolved lazily per call (the episode dir isn't
+    known when the model is built); a call outside an episode simply doesn't write. json.dumps
+    uses default=str so anything unusual is stringified rather than raising, and failures are
+    swallowed so logging never breaks a run. NOTE: this records full prompts (incl. the AXTree
+    observation), so llm_calls.jsonl can be large."""
+    import json
+
+    _orig_create = model.client.chat.completions.create
+
+    def _logged(**kw):
+        resp = _orig_create(**kw)
+        try:
+            path = _llm_log_path()
+            if path:
+                req = dict(kw)
+                # `messages` is a Discussion (custom, non-list) whose elements are AIMessage
+                # (a dict subclass). json can't serialize the Discussion itself, so expand it
+                # to plain dicts to preserve structured role/content instead of a str() blob.
+                msgs = req.get("messages")
+                if msgs is not None:
+                    try:
+                        req["messages"] = [dict(m) if isinstance(m, dict) else m for m in msgs]
+                    except Exception:
+                        pass
+                record = {
+                    "request": req,
+                    "response": resp.model_dump() if hasattr(resp, "model_dump") else resp,
+                }
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, default=str) + "\n")
+        except Exception:
+            pass
+        return resp
+
+    model.client.chat.completions.create = _logged
+
+
 def _custom_headers():
     """Parse ANTHROPIC_CUSTOM_HEADERS into a dict, or return {} if unset/empty.
 
@@ -116,6 +185,12 @@ class CacheAwareChatModel(ChatModel):
     def __init__(self, *args, cache_user=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._cache_user = cache_user or ("wa-" + uuid.uuid4().hex[:16])
+        # Claude honors explicit cache_control breakpoints + its own cache-read discount.
+        # OpenAI-shape models (e.g. azure/gpt-5.5) cache prompt prefixes automatically
+        # server-side and REJECT cache_control blocks, so for them we skip the injection
+        # and correct billing from usage.cached_tokens at OPENAI_CACHE_READ_FACTOR instead.
+        m = (self.model_name or "").lower()
+        self._is_anthropic = "claude" in m or "anthropic" in m
         # Cache-token counts from the most recent create() call; consumed by __call__ to
         # correct the (cache-blind) cost the base ChatModel records. Reset per __call__.
         self._last_cached_tokens = 0
@@ -123,7 +198,7 @@ class CacheAwareChatModel(ChatModel):
         _orig_create = self.client.chat.completions.create
 
         def _wrapped(**kw):
-            if kw.get("messages"):
+            if kw.get("messages") and self._is_anthropic:
                 kw["messages"] = _with_cache_control(kw["messages"])
             kw.setdefault("user", self._cache_user)  # sticky routing -> cache reads hit
             resp = _orig_create(**kw)
@@ -173,9 +248,15 @@ class CacheAwareChatModel(ChatModel):
         self._last_written_tokens = 0
         res = super().__call__(messages, n_samples=n_samples, temperature=temperature)
         if self.input_cost:
-            f = tracking.ANTHROPIC_CACHE_PRICING_FACTOR
-            delta = -self._last_cached_tokens * self.input_cost * (1 - f["cache_read_tokens"]) + (
-                self._last_written_tokens * self.input_cost * (f["cache_write_tokens"] - 1)
+            if self._is_anthropic:
+                f = tracking.ANTHROPIC_CACHE_PRICING_FACTOR
+                read_factor, write_factor = f["cache_read_tokens"], f["cache_write_tokens"]
+            else:
+                # OpenAI-shape: cached input bills at OPENAI_CACHE_READ_FACTOR x the input rate,
+                # no cache-write premium (caching is automatic, server-side).
+                read_factor, write_factor = OPENAI_CACHE_READ_FACTOR, 1.0
+            delta = -self._last_cached_tokens * self.input_cost * (1 - read_factor) + (
+                self._last_written_tokens * self.input_cost * (write_factor - 1)
             )
             if (
                 delta
@@ -185,6 +266,11 @@ class CacheAwareChatModel(ChatModel):
                 tracking.TRACKER.instance(0, 0, delta)
         return res
 
+
+# Fraction of the input rate that OpenAI-shape models (e.g. azure/gpt-5.5) charge for cached
+# input tokens; they cache prompt prefixes automatically and carry no cache-write premium.
+# OpenAI's cached-input discount is ~0.5x. Claude instead uses ANTHROPIC_CACHE_PRICING_FACTOR.
+OPENAI_CACHE_READ_FACTOR = float(os.environ.get("WA_OPENAI_CACHE_READ_FACTOR", "0.5"))
 
 # $/token (input, output) for models served via the proxy, used when WA_INPUT_COST /
 # WA_OUTPUT_COST are unset. The aws/claude-sonnet-5 rates are the litellm cost-map values.
@@ -202,18 +288,33 @@ class ProxyModelArgs(BaseModelArgs):
 
     def make_model(self):
         model_cls = ChatModel if os.environ.get("WA_CACHE") == "0" else CacheAwareChatModel
-        client_args: dict = {"base_url": os.environ["OPENAI_BASE_URL"]}  # ".../v1" or ".../anthropic"
-        headers = _custom_headers()
-        if headers:  # e.g. ANTHROPIC_CUSTOM_HEADERS="x-context-guru-token: cg_live_xxx"
-            client_args["default_headers"] = headers
-        # Auth may be carried by a custom header (e.g. contextguru) rather than the OpenAI
-        # api_key. The OpenAI SDK still requires a non-empty api_key string, so fall back to
-        # a placeholder when OPENAI_API_KEY is unset but custom headers provide auth.
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            if not headers:
-                raise KeyError("OPENAI_API_KEY unset and no ANTHROPIC_CUSTOM_HEADERS to auth with")
-            api_key = "header-auth"  # placeholder; real auth is in default_headers
+        if _use_rits():
+            # RITS (IBM Research Inference, see rits.py) is OpenAI-compatible but authenticates
+            # via a custom ``RITS_API_KEY`` header. The OpenAI SDK still needs a non-empty
+            # api_key, and rits.py sets it to the same key, so we mirror that. Each RITS
+            # deployment serves ONE model, so the base_url is model-specific (RITS_BASE_URL).
+            rits_key = os.environ.get("RITS_API_KEY")
+            if not rits_key:
+                raise KeyError("WA_RITS=1 but RITS_API_KEY is unset")
+            base_url = os.environ.get("RITS_BASE_URL", DEFAULT_RITS_BASE_URL)
+            client_args: dict = {
+                "base_url": base_url,
+                "default_headers": {"RITS_API_KEY": rits_key},
+            }
+            api_key = rits_key
+        else:
+            client_args = {"base_url": os.environ["OPENAI_BASE_URL"]}  # ".../v1" or ".../anthropic"
+            headers = _custom_headers()
+            if headers:  # e.g. ANTHROPIC_CUSTOM_HEADERS="x-context-guru-token: cg_live_xxx"
+                client_args["default_headers"] = headers
+            # Auth may be carried by a custom header (e.g. contextguru) rather than the OpenAI
+            # api_key. The OpenAI SDK still requires a non-empty api_key string, so fall back to
+            # a placeholder when OPENAI_API_KEY is unset but custom headers provide auth.
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                if not headers:
+                    raise KeyError("OPENAI_API_KEY unset and no ANTHROPIC_CUSTOM_HEADERS to auth with")
+                api_key = "header-auth"  # placeholder; real auth is in default_headers
 
         def _pricing_func():
             """Per-token prices so cost tracking is non-zero on the proxy path.
@@ -230,7 +331,7 @@ class ProxyModelArgs(BaseModelArgs):
                 return {self.model_name: {"prompt": cin, "completion": cout}}
             return {}  # unknown model + no override -> base sets 0 and warns
 
-        return model_cls(
+        model = model_cls(
             model_name=self.model_name,
             api_key=api_key,
             temperature=self.temperature,
@@ -239,6 +340,8 @@ class ProxyModelArgs(BaseModelArgs):
             client_args=client_args,
             pricing_func=_pricing_func,
         )
+        _install_call_logger(model)
+        return model
 
 
 # Model id as the OpenAI SDK must send it to the proxy — NO "openai/" prefix (that is a
@@ -251,7 +354,13 @@ PROXY_MODEL_ARGS = ProxyModelArgs(
     model_name=os.environ.get("WA_AGENT_MODEL", DEFAULT_AGENT_MODEL),
     max_total_tokens=200_000,
     max_input_tokens=180_000,
-    max_new_tokens=2_000,
-    temperature=0.1,
+    # Reasoning models (e.g. moonshotai/Kimi-K2.7-Code) spend output tokens on a hidden
+    # `reasoning` field before emitting `content`; too small a budget returns content=None
+    # (finish_reason=length). Raise via WA_MAX_NEW_TOKENS for those (e.g. 8000).
+    max_new_tokens=int(os.environ.get("WA_MAX_NEW_TOKENS", "2000")),
+    # Reasoning models (e.g. azure/gpt-5.5) reject any temperature but the default 1
+    # ("Unsupported value: 'temperature' does not support 0.1"). Override with
+    # WA_TEMPERATURE=1 for those; default preserved for the Claude models.
+    temperature=float(os.environ.get("WA_TEMPERATURE", "0.1")),
     vision_support=False,
 )

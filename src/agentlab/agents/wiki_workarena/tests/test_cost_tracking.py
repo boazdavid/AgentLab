@@ -16,6 +16,7 @@ from agentlab.llm import tracking
 from agentlab.agents.wiki_workarena.proxy_model import (
     CacheAwareChatModel,
     ProxyModelArgs,
+    OPENAI_CACHE_READ_FACTOR,
     _PROXY_RATES,
 )
 
@@ -48,14 +49,14 @@ def _fake_client_factory(prompt_tokens, completion_tokens, cached=0, written=0):
     return FakeClient
 
 
-def _make(fake_client, prices=True):
+def _make(fake_client, prices=True, model_name="aws/claude-sonnet-5"):
     pricing = (
-        (lambda: {"aws/claude-sonnet-5": {"prompt": IN_COST, "completion": OUT_COST}})
+        (lambda: {model_name: {"prompt": IN_COST, "completion": OUT_COST}})
         if prices
         else None
     )
     return CacheAwareChatModel(
-        model_name="aws/claude-sonnet-5",
+        model_name=model_name,
         api_key="k",
         temperature=0.1,
         max_tokens=2000,
@@ -88,6 +89,62 @@ def test_cache_aware_cost_reads_and_writes():
     # and it must be cheaper than the old cache-blind flat cost
     flat = 10_000 * IN_COST + 500 * OUT_COST
     assert stats["cost"] < flat
+
+
+def test_openai_model_cached_reads_billed_at_openai_factor():
+    """Non-Claude model (azure/gpt-5.5): cached input billed at OPENAI_CACHE_READ_FACTOR (0.5x),
+    no cache-write premium. This is the correction that was missing under WA_CACHE=0."""
+    model = _make(
+        _fake_client_factory(10_000, 500, cached=6_000, written=0),
+        model_name="azure/gpt-5.5",
+    )
+    assert model._is_anthropic is False
+    stats = _run(model)
+    expected = (
+        (10_000 - 6_000) * IN_COST
+        + 6_000 * IN_COST * OPENAI_CACHE_READ_FACTOR
+        + 500 * OUT_COST
+    )
+    assert stats["cost"] == pytest.approx(expected, rel=1e-9)
+    assert stats["input_tokens"] == 10_000
+    # cheaper than cache-blind flat cost, but NOT as cheap as Anthropic's 0.1x read rate
+    flat = 10_000 * IN_COST + 500 * OUT_COST
+    assert stats["cost"] < flat
+
+
+def test_openai_model_no_cache_control_injected():
+    """cache_control blocks must NOT be injected for an OpenAI-shape model (it would 400).
+    The Anthropic model, by contrast, gets the system block marked."""
+    seen = {}
+
+    def create(**kw):
+        seen["messages"] = kw.get("messages")
+        usage = types.SimpleNamespace(
+            prompt_tokens=100, completion_tokens=10,
+            prompt_tokens_details=types.SimpleNamespace(cached_tokens=0),
+        )
+        return types.SimpleNamespace(
+            usage=usage,
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="ok", log_probs=None))],
+        )
+
+    class FakeClient:
+        def __init__(self, **kw):
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+
+    def _has_cache_control(messages):
+        for msg in messages or []:
+            content = msg.get("content")
+            if isinstance(content, list):
+                if any(isinstance(b, dict) and "cache_control" in b for b in content):
+                    return True
+        return False
+
+    _run(_make(FakeClient, model_name="azure/gpt-5.5"))
+    assert _has_cache_control(seen["messages"]) is False
+
+    _run(_make(FakeClient, model_name="aws/claude-sonnet-5"))
+    assert _has_cache_control(seen["messages"]) is True
 
 
 def test_no_cache_equals_flat_cost():

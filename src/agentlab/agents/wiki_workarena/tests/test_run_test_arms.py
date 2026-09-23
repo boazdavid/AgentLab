@@ -2,7 +2,7 @@
 
 Asserts (without .run()) that after ``agent.set_benchmark(bench)`` the retrieval
 arm's ``agent.flags.action.action_set`` is a WikiActionSetArgs whose action set
-exposes get_articles and NOT query_articles.
+exposes get_memories and NOT query_memories.
 """
 
 from agentlab.agents.wiki_workarena.cached_agent import CachedSystemAgentArgs
@@ -13,7 +13,7 @@ from agentlab.agents.wiki_workarena.run_test_arms import build_arm
 def _fake_wiki(tmp_path):
     wiki = tmp_path / "wiki"
     wiki.mkdir()
-    (wiki / "index.md").write_text("- [x](concepts/x.md) — x\n", encoding="utf-8")
+    (wiki / "index.md").write_text("- [x](memories/x.md) — x\n", encoding="utf-8")
     return wiki
 
 
@@ -30,16 +30,16 @@ def test_retrieval_arm_set_benchmark_wiring(tmp_path):
 
     action_set = agent_args.flags.action.action_set
     assert isinstance(action_set, WikiActionSetArgs)
-    assert action_set.action_names == ("get_articles",)
+    assert action_set.action_names == ("get_memories",)
 
     aset = action_set.make_action_set()
-    assert "def get_articles" in aset.python_includes
-    assert "def query_articles" not in aset.python_includes
+    assert "def get_memories" in aset.python_includes
+    assert "def query_memories" not in aset.python_includes
 
     # The injected catalog now lives in cached_system_suffix, NOT extra_instructions.
     assert "{{INDEX_MD}}" not in agent_args.cached_system_suffix
-    assert "concepts/x.md" in agent_args.cached_system_suffix
-    assert "concepts/x.md" not in (agent_args.flags.extra_instructions or "")
+    assert "memories/x.md" in agent_args.cached_system_suffix
+    assert "memories/x.md" not in (agent_args.flags.extra_instructions or "")
 
 
 def test_control_arm_uses_stock_action_set(tmp_path):

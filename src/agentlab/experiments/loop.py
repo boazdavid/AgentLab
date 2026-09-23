@@ -406,6 +406,11 @@ class ExpArgs:
         # start writing logs to run logfile
         self._set_logger()
 
+        # Publish the current episode dir so per-call debug hooks (e.g. the wiki_workarena
+        # proxy_model usage logger) can write into this experiment folder. Set per process;
+        # each Ray worker runs one episode, so this is isolated per episode.
+        os.environ["AGENTLAB_CURRENT_EXP_DIR"] = str(self.exp_dir)
+
         # log python environment info
         save_package_versions(Path(self.exp_dir))
 

@@ -7,7 +7,8 @@ browsergym, or the network, so they run fast and fully offline.
 
 import json
 
-from agentlab.agents.wiki_workarena.parse_workarena import episode_to_trajectory_dict
+from agentlab.agents.wiki_workarena.parse_workarena import \
+    episode_to_trajectory_dict
 
 
 def _fabricated_steps():
@@ -45,11 +46,11 @@ def _fabricated_steps():
             "reward": 0,
             "terminated": False,
         },
-        # 2: query_articles whose NEXT step carries a WIKI SEARCH RESULTS payload
+        # 2: query_memories whose NEXT step carries a WIKI SEARCH RESULTS payload
         {
-            "think": "Let me consult the wiki.\n\n<action>\nquery_articles('how to navigate modules')\n</action>",
-            "action": "query_articles('how to navigate modules')",
-            "action_name": "query_articles",
+            "think": "Let me consult the wiki.\n\n<action>\nquery_memories('how to navigate modules')\n</action>",
+            "action": "query_memories('how to navigate modules')",
+            "action_name": "query_memories",
             "action_args": {"args": ["how to navigate modules"]},
             "url": "https://example.service-now.com/search",
             "axtree_head": "RootWebArea 'Search'",
@@ -67,7 +68,7 @@ def _fabricated_steps():
             "action_args": {"args": ["2870"]},
             "url": "https://example.service-now.com/results",
             "axtree_head": "RootWebArea 'Results'",
-            "last_action_error": "WIKI SEARCH RESULTS:\nconcepts/navigate.md — how to navigate the app",
+            "last_action_error": "WIKI SEARCH RESULTS:\nmemories/navigate.md — how to navigate the app",
             "reward": 0,
             "terminated": False,
         },
@@ -171,12 +172,12 @@ def test_real_error_marks_failure():
 
 
 def test_retrieval_delivers_wiki_text_as_response():
-    # step 2 (query_articles): step 3's error starts with WIKI SEARCH RESULTS
-    tc = _find_first_toolcall(_traj(), "query_articles")
+    # step 2 (query_memories): step 3's error starts with WIKI SEARCH RESULTS
+    tc = _find_first_toolcall(_traj(), "query_memories")
     assert tc["success"] is True
     assert tc["error_text"] is None
     assert tc["response"] is not None
-    assert "concepts/navigate.md" in tc["response"]
+    assert "memories/navigate.md" in tc["response"]
     # leading marker line may be stripped
     assert "how to navigate the app" in tc["response"]
 
@@ -252,10 +253,9 @@ def _assistant_for_toolcall(traj, tool_name, occurrence=0):
 
 # --- element-target enrichment (resolves acted bid -> role/name) --------------
 
-from agentlab.agents.wiki_workarena.parse_workarena import (
-    resolve_bid_target,
-    episode_to_trajectory_dict as _e2t,
-)
+from agentlab.agents.wiki_workarena.parse_workarena import \
+    episode_to_trajectory_dict as _e2t
+from agentlab.agents.wiki_workarena.parse_workarena import resolve_bid_target
 
 AXTREE = (
     "RootWebArea 'Create PRB'\n"
@@ -306,7 +306,8 @@ def test_no_action_target_leaves_args_unchanged():
 
 
 def test_strip_axtree_noise_removes_plumbing_keeps_state():
-    from agentlab.agents.wiki_workarena.parse_workarena import _strip_axtree_noise
+    from agentlab.agents.wiki_workarena.parse_workarena import \
+        _strip_axtree_noise
     ax = (
         "[47] generic, live='assertive', atomic, relevant='additions text'\n"
         "[66] button 'My ServiceNow landing page', clickable, visible, describedby='logo-tooltip'\n"
